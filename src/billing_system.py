@@ -517,6 +517,84 @@ class BillingSystem:
         except sqlite3.Error as e:
             messagebox.showerror('Database Error', f'Error loading bills: {str(e)}')
 
+    def print_bill_details(self, bill_text, bill_no):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.txt',
+            filetypes=[('Text files', '*.txt'), ('All files', '*.*')],
+            initialfile=f'Bill_{bill_no}.txt'
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'w') as file:
+                    file.write(bill_text)
+                messagebox.showinfo('Success', 'Bill saved for printing!')
+            except Exception as e:
+                messagebox.showerror('Error', f'Error saving bill: {str(e)}')
+    def generate_qr_data(self, bill_no):
+        """Generate QR code data string from bill information"""
+        try:
+            conn = sqlite3.connect('billing_system.db')
+            cursor = conn.cursor()
+            
+            # Get bill header
+            cursor.execute('''SELECT * FROM bills WHERE bill_no = ?''', (bill_no,))
+            bill = cursor.fetchone()
+            
+            # Get bill items
+            cursor.execute('''SELECT * FROM bill_items WHERE bill_no = ?''', (bill_no,))
+            items = cursor.fetchall()
+            
+            # Create QR data string
+            qr_data = f"""Bill No: {bill[0]}
+            Customer: {bill[1]}
+            Phone: {bill[2]}
+            Date: {bill[3]}
+            Amount: ₹{bill[4]:.2f}
+            Items:
+            """
+            for item in items:
+                qr_data += f"{item[1]}, Qty: {item[4]}, Price: ₹{item[3]}\n"
+            
+            conn.close()
+            return qr_data
+            
+        except sqlite3.Error as e:
+            messagebox.showerror('Database Error', f'Error generating QR data: {str(e)}')
+            return None
+
+    def generate_qr_code(self, data, bill_no):
+        """Generate QR code image from data"""
+        import qrcode
+        from PIL import Image
+        
+        try:
+            # Generate QR code
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(data)
+            qr.make(fit=True)
+            
+            # Create QR code image
+            qr_image = qr.make_image(fill_color="black", back_color="white")
+            
+            # Save QR code
+            qr_folder = 'qr_codes'
+            if not os.path.exists(qr_folder):
+                os.makedirs(qr_folder)
+                
+            qr_path = os.path.join(qr_folder, f'bill_{bill_no}_qr.png')
+            qr_image.save(qr_path)
+            return qr_path
+            
+        except Exception as e:
+            messagebox.showerror('Error', f'Error generating QR code: {str(e)}')
+            return None
+
     def show_bill_details(self, bill_no):
         try:
             conn = sqlite3.connect('billing_system.db')
@@ -537,17 +615,25 @@ class BillingSystem:
             # Create bill details window
             details_window = tk.Toplevel(self.root)
             details_window.title(f'Bill Details - {bill_no}')
-            details_window.geometry('600x800')
+            details_window.geometry('800x900')
             
-            # Add a frame for the bill content
-            content_frame = tk.Frame(details_window, bd=8, relief=tk.GROOVE)
-            content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            # Main frame
+            main_frame = tk.Frame(details_window)
+            main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            
+            # Left frame for bill text
+            left_frame = tk.Frame(main_frame, bd=8, relief=tk.GROOVE)
+            left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            
+            # Right frame for QR code
+            right_frame = tk.Frame(main_frame, bd=8, relief=tk.GROOVE)
+            right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
             
             # Bill text area
-            bill_text = tk.Text(content_frame, font=('times new roman', 12))
+            bill_text = tk.Text(left_frame, font=('times new roman', 12))
             bill_text.pack(fill=tk.BOTH, expand=True)
             
-            # Add scrollbar
+            # Scrollbar for text area
             scrollbar = tk.Scrollbar(bill_text)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             bill_text.config(yscrollcommand=scrollbar.set)
@@ -574,6 +660,24 @@ class BillingSystem:
             bill_text.insert(tk.END, f'Total Items: {total_items}\n')
             bill_text.insert(tk.END, f'Total Amount: ₹{bill[4]:.2f}\n')
             
+            # Generate and display QR code
+            qr_data = self.generate_qr_data(bill_no)
+            if qr_data:
+                qr_path = self.generate_qr_code(qr_data, bill_no)
+                if qr_path and os.path.exists(qr_path):
+                    # Load and display QR code
+                    qr_image = Image.open(qr_path)
+                    qr_image = qr_image.resize((200, 200), Image.Resampling.LANCZOS)
+                    qr_photo = ImageTk.PhotoImage(qr_image)
+                    
+                    # QR code label
+                    qr_label = tk.Label(right_frame, image=qr_photo)
+                    qr_label.image = qr_photo  # Keep a reference!
+                    qr_label.pack(pady=5)
+                    
+                    tk.Label(right_frame, text="Scan QR for bill details",
+                            font=('times new roman', 10)).pack()
+            
             # Button frame
             button_frame = tk.Frame(details_window)
             button_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -581,6 +685,11 @@ class BillingSystem:
             # Add Print and Close buttons
             tk.Button(button_frame, text='Print Bill',
                     command=lambda: self.print_bill_details(bill_text.get(1.0, tk.END), bill_no),
+                    font=('times new roman', 12, 'bold'),
+                    bg='lightgray', fg='black').pack(side=tk.LEFT, padx=5)
+            
+            tk.Button(button_frame, text='Save QR Code',
+                    command=lambda: self.save_qr_code(bill_no),
                     font=('times new roman', 12, 'bold'),
                     bg='lightgray', fg='black').pack(side=tk.LEFT, padx=5)
             
@@ -596,20 +705,24 @@ class BillingSystem:
         except sqlite3.Error as e:
             messagebox.showerror('Database Error', f'Error showing bill details: {str(e)}')
 
-    def print_bill_details(self, bill_text, bill_no):
-        file_path = filedialog.asksaveasfilename(
-            defaultextension='.txt',
-            filetypes=[('Text files', '*.txt'), ('All files', '*.*')],
-            initialfile=f'Bill_{bill_no}.txt'
-        )
-        
-        if file_path:
-            try:
-                with open(file_path, 'w') as file:
-                    file.write(bill_text)
-                messagebox.showinfo('Success', 'Bill saved for printing!')
-            except Exception as e:
-                messagebox.showerror('Error', f'Error saving bill: {str(e)}')
+    def save_qr_code(self, bill_no):
+        """Save QR code to user-selected location"""
+        qr_path = os.path.join('qr_codes', f'bill_{bill_no}_qr.png')
+        if os.path.exists(qr_path):
+            save_path = filedialog.asksaveasfilename(
+                defaultextension='.png',
+                filetypes=[('PNG files', '*.png'), ('All files', '*.*')],
+                initialfile=f'Bill_{bill_no}_QR.png'
+            )
+            if save_path:
+                try:
+                    import shutil
+                    shutil.copy2(qr_path, save_path)
+                    messagebox.showinfo('Success', 'QR code saved successfully!')
+                except Exception as e:
+                    messagebox.showerror('Error', f'Error saving QR code: {str(e)}')
+        else:
+            messagebox.showerror('Error', 'QR code file not found!')    
     def clear(self):
         # Clear customer details
         self.bill_no.set(str(random.randint(1000, 9999)))
